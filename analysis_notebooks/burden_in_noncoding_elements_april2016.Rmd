@@ -1,0 +1,812 @@
+---
+title: "burden_in_noncoding_elements_april2016"
+author: "Patrick Short"
+date: "20 April 2016"
+output: html_document
+---
+
+The non-coding elements have been revised to remove any parts of the elements that overlap with coding sequence. Furthermore, previous analyses were based on filtered of pp_dnm that resulted in a depression in the number of de novos. To calculate burden, we use a simulation model as well as the empirical poisson expectation.
+
+```{r load CNEs and split into annotation types}
+source("../R/annotation_tools.R")
+
+CNEs = read.table("../data/CNEs_subtract_CDS.txt", header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+#CNEs = read.table("../data/noncoding_regions.txt", header = TRUE, sep = "\t")
+#CNEs = get_gene_distance(CNEs, gencode)
+exac_pli = read.table("../data/exac_pLI.txt", header = TRUE, sep = "\t")
+CNEs$pLI = exac_pli$pLI[match(CNEs$closest_gene, exac_pli$gene)]
+
+#layout(t(c(1,2,3)))
+#hist((CNEs$stop - CNEs$start)[CNEs$cne_annotation == "Conserved"], xlab = "Length of Element (bp)", main = "Conserved", col = "cyan")
+#hist((CNEs$stop - CNEs$start)[CNEs$cne_annotation == "Enhancer"], xlab = "Length of Element (bp)", main = "Enhancer", col = "yellow")
+#hist((CNEs$stop - CNEs$start)[CNEs$cne_annotation == "Heart"], xlab = "Length of Element (bp)", main = "Heart", col = "purple")
+
+# sets of conserved elements
+CNEs_conserved = subset(CNEs, cne_annotation == "Conserved")
+CNEs_enhancer = subset(CNEs, cne_annotation == "Enhancer")
+CNEs_heart = subset(CNEs, cne_annotation == "Heart")
+CNEs_non_heart = rbind(CNEs_conserved, CNEs_enhancer)
+
+```
+
+We can plot the expected number of mutations based on the mutation rate model and compare this to the observed number. As we can see, most of the excess is concentrated in the conserved elements (both proband sets) and the enhancer sets of the undiagnosed patients.
+
+```{r load de novos and restrict to snps and regions, echo = FALSE}
+library(ggplot2)
+diagnosed = as.character(read.table("../../CNE/data/diagnosed_ids_4k.txt", header = FALSE, sep = "\t")$V1)
+
+# restrict to de novo snps
+de_novos = read.table("../../SingletonMetric/data/de_novos.ddd_4k.noncoding_included.txt", header = TRUE, sep = "\t")
+de_novos = subset(de_novos, nchar(as.character(de_novos$ref)) == 1 & nchar(as.character(de_novos$alt)) == 1)
+
+de_novos_cne = filter_with_bed(de_novos, CNEs)
+de_novos_cne = subset(de_novos_cne, pp_dnm > 0.00781)  # ppdnm cutoff derived from DDD 4k analysis
+
+de_novos_cne$diagnosed = de_novos_cne$person_stable_id %in% diagnosed
+de_novos_cne$region_id = get_region_id(de_novos_cne, CNEs)
+
+# add additional annotations (pLI and DDG2P)
+de_novos_cne$ddg2p = CNEs$ddg2p[match(de_novos_cne$region_id, CNEs$region_id)]
+de_novos_cne$constrained_gene =  CNEs$pLI[match(de_novos_cne$region_id, CNEs$region_id)] > 0.9
+de_novos_cne$cne_annotation = CNEs$cne_annotation[match(de_novos_cne$region_id, CNEs$region_id)]
+
+#de_novos_cne = subset(de_novos_cne, pp_dnm > 0.1)
+de_novos_conserved = filter_with_bed(de_novos_cne, CNEs_conserved)
+de_novos_enhancer = filter_with_bed(de_novos_cne, CNEs_enhancer)
+de_novos_heart = filter_with_bed(de_novos_cne, CNEs_heart)
+de_novos_non_heart = filter_with_bed(de_novos_cne, CNEs_non_heart)
+
+poisson_bar_ggplot <- function(p, obs, main){
+  
+  p = p[1:(obs+51)]
+  counts = unlist(mapply(function(count, times) rep(count, times), seq(0, obs+50), round(1000000*p)))
+  sim_hist(counts, obs, main = main)
+  
+}
+
+```
+
+
+First, risk across the three element classes without separating into diagnosed and undiagnosed.
+
+```{r element class risk, echo = FALSE}
+
+pop = 4294
+lambda_heart = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null)*pop)
+lambda_enhancer = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null)*pop)
+lambda_conserved = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null)*pop)
+
+obs_heart = nrow(subset(de_novos_cne, cne_annotation == "Heart"))
+obs_enhancer = nrow(subset(de_novos_cne, cne_annotation == "Enhancer"))
+obs_conserved = nrow(subset(de_novos_cne, cne_annotation == "Conserved"))
+
+layout(t(c(1,2,3)))
+poisson_bar_ggplot(lambda_heart, obs_heart, main = "Heart")
+poisson_bar_ggplot(lambda_enhancer, obs_enhancer, main = "Enhancer")
+poisson_bar_ggplot(lambda_conserved, obs_conserved, main = "Conserved")
+
+```
+
+Splitting into diagnosed and undiagnosed:
+
+```{r element class risk, echo = FALSE}
+
+#undiagnosed
+pop = 3112
+lambda_heart = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null)*pop)
+lambda_enhancer = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null)*pop)
+lambda_conserved = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null)*pop)
+
+obs_heart = nrow(subset(de_novos_cne, cne_annotation == "Heart" & diagnosed == FALSE))
+obs_enhancer = nrow(subset(de_novos_cne, cne_annotation == "Enhancer" & diagnosed == FALSE))
+obs_conserved = nrow(subset(de_novos_cne, cne_annotation == "Conserved" & diagnosed == FALSE))
+
+layout(t(c(1,2,3)))
+poisson_bar_ggplot(lambda_heart, obs_heart, main = "Heart")
+poisson_bar_ggplot(lambda_enhancer, obs_enhancer, main = "Enhancer")
+poisson_bar_ggplot(lambda_conserved, obs_conserved, main = "Conserved")
+
+
+# diagnosed
+pop = 1182
+lambda_heart = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null)*pop)
+lambda_enhancer = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null)*pop)
+lambda_conserved = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null)*pop)
+
+obs_heart = nrow(subset(de_novos_cne, cne_annotation == "Heart" & diagnosed == TRUE))
+obs_enhancer = nrow(subset(de_novos_cne, cne_annotation == "Enhancer" & diagnosed == TRUE))
+obs_conserved = nrow(subset(de_novos_cne, cne_annotation == "Conserved" & diagnosed == TRUE))
+
+layout(t(c(1,2,3)))
+poisson_bar_ggplot(lambda_heart, obs_heart, main = "Heart")
+poisson_bar_ggplot(lambda_enhancer, obs_enhancer, main = "Enhancer")
+poisson_bar_ggplot(lambda_conserved, obs_conserved, main = "Conserved")
+
+```
+
+
+There are a few downstream hypotheses we would like to test:
+1. Are de novos enriched in elements that are closer to genes?
+2. Are de novos enriched in DNase hypersensitive sites? Particularly, regions that are open in brain/developmental tissues.
+3. Are de novos enriched in regions that are under strong constraint (as shown by MAPS and MACB)?
+
+If number three is not true, then a monoallelic model for non-coding elements in developmental disease is unlikely!
+
+Is this excess concentrated in non-coding elements near DDG2P genes? Here, we will consider enhancers and conserved elements together.
+
+
+```{r proximity to target gene, echo = FALSE}
+
+# distance quantiles
+CNE_distance_quantiles = quantile(CNEs$distance, seq(0,1,0.2), include.lowest = TRUE)
+CNEs$distance_quantile = cut(CNEs$distance, CNE_distance_quantiles)
+q = levels(CNEs$distance_quantile)
+
+# full set
+pop = 3112
+lambda_quantile1 = dpois(x = seq(0, 400), sum(subset(CNEs, distance_quantile == q[1])$p_snp_null)*pop)
+lambda_quantile2 = dpois(x = seq(0, 400), sum(subset(CNEs, distance_quantile == q[2])$p_snp_null)*pop)
+lambda_quantile3 = dpois(x = seq(0, 400), sum(subset(CNEs, distance_quantile == q[3])$p_snp_null)*pop)
+lambda_quantile4 = dpois(x = seq(0, 400), sum(subset(CNEs, distance_quantile == q[4])$p_snp_null)*pop)
+lambda_quantile5 = dpois(x = seq(0, 400), sum(subset(CNEs, distance_quantile == q[5])$p_snp_null)*pop)
+
+
+poisson_proximity = function(CNEs, s, e, de_novos, pop = 3112) {
+  observed = sum(de_novos$distance < e & de_novos$distance > s)
+  lambda = sum(subset(CNEs, (distance < e) & (distance > s))$p_snp_null)*pop
+  pval = ppois(observed-1, lambda, lower.tail = FALSE)
+  return(list("expected"= lambda, "observed" = observed, "pval" = pval))
+}
+
+
+
+de_novos_cne$distance_quantile = CNEs$distance_quantile[match(de_novos_cne$region_id, CNEs$region_id)]
+de_novos_cne$diagnosed = de_novos_cne$person_stable_id %in% diagnosed
+
+obs_quantile1 = nrow(subset(de_novos_cne, distance_quantile == q[1] & diagnosed == FALSE))
+obs_quantile2 = nrow(subset(de_novos_cne, distance_quantile == q[2] & diagnosed == FALSE))
+obs_quantile3 = nrow(subset(de_novos_cne, distance_quantile == q[3] & diagnosed == FALSE))
+obs_quantile4 = nrow(subset(de_novos_cne, distance_quantile == q[4] & diagnosed == FALSE))
+obs_quantile5 = nrow(subset(de_novos_cne, distance_quantile == q[5] & diagnosed == FALSE))
+
+layout(t(c(1,2,3,4,5)))
+poisson_bar_ggplot(lambda_quantile1, obs_quantile1, main = q[1])
+poisson_bar_ggplot(lambda_quantile2, obs_quantile2, main = q[2])
+poisson_bar_ggplot(lambda_quantile3, obs_quantile3, main = q[3])
+poisson_bar_ggplot(lambda_quantile4, obs_quantile4, main = q[4])
+poisson_bar_ggplot(lambda_quantile5, obs_quantile5, main = q[5])
+
+```
+
+Now, testing the enrichment of de novo mutations in non-coding elements shown to be under strong purifying selection:
+
+```{r DDD MACB, echo = FALSE}
+ddd_noncoding_MACB = read.table("~/phd/code/MACB/data/non_coding_elements_MACB_summary.DDD.synonymous_z_trimmed.txt", header = TRUE, sep = "\t")
+
+ddd_noncoding_MACB$region_id = paste0("chr", ddd_noncoding_MACB$region_id)
+
+CNEs_non_heart$MACB_Z = ddd_noncoding_MACB$MACB_Z[match(CNEs_non_heart$region_id, ddd_noncoding_MACB$region_id)]
+CNEs_non_heart = subset(CNEs_non_heart, !is.na(MACB_Z))
+
+constrained_regions = CNEs_non_heart$region_id[CNEs_non_heart$MACB_Z > 3]
+non_constrained_regions = CNEs_non_heart$region_id[CNEs_non_heart$MACB_Z <= 3]
+
+# undiagnosed
+pop = 3112
+lambda_constrained = dpois(x = seq(0, 400), sum(subset(CNEs_non_heart, MACB_Z > 3)$p_snp_null)*pop)
+lambda_non_constrained = dpois(x = seq(0, 500), sum(subset(CNEs_non_heart, MACB_Z <= 3)$p_snp_null)*pop)
+
+obs_constrained = nrow(subset(de_novos_non_heart, (region_id %in% constrained_regions) & diagnosed == FALSE))
+obs_non_constrained = nrow(subset(de_novos_non_heart, region_id %in% non_constrained_regions & diagnosed == FALSE))
+
+layout(t(c(1,2)))
+poisson_bar_ggplot(lambda_constrained, obs_constrained, main = "Constrained Elements")
+poisson_bar_ggplot(lambda_non_constrained, obs_non_constrained, main = "Non-Constrained Elements")
+
+
+# diagnosed
+pop = 1182
+lambda_constrained = dpois(x = seq(0, 200), sum(subset(CNEs_non_heart, MACB_Z > 3)$p_snp_null)*pop)
+lambda_non_constrained = dpois(x = seq(0, 400), sum(subset(CNEs_non_heart, MACB_Z <= 3)$p_snp_null)*pop)
+
+obs_constrained = nrow(subset(de_novos_non_heart, (region_id %in% constrained_regions) & diagnosed == TRUE))
+obs_non_constrained = nrow(subset(de_novos_non_heart, region_id %in% non_constrained_regions & diagnosed == TRUE))
+
+layout(t(c(1,2)))
+poisson_bar_ggplot(lambda_constrained, obs_constrained, main = "Constrained Elements")
+poisson_bar_ggplot(lambda_non_constrained, obs_non_constrained, main = "Non-Constrained Elements")
+
+
+```
+
+
+Another measure of constraint is MAPS:
+
+```{r DDD MAPS, echo = FALSE}
+source('../../dddMAPS/dddMAPS/MAPS.R')
+
+non_coding_variants = read.table("../../MACB/data/DDD_4k_unaff_parents_noncoding_allele_counts.multisample_vcfs.variant_count_qc.CADD.txt", header = TRUE, sep = "\t")
+non_coding = filter_with_bed(non_coding, CNEs)
+non_coding$region_id = get_region_id(non_coding, CNEs)
+non_coding$region_with_dn = non_coding$region_id %in% de_novos_cne$region_id
+
+recurrent_regions = table(de_novos_cne$region_id)
+recurrent_regions = names(recurrent_regions[recurrent_regions > 1])
+
+non_coding$recurrent_region = non_coding$region_id %in% recurrent_regions
+
+load("../../dddMAPS/data/DDD_4k_parents_synonymous_maps_lm.RData")
+
+maps_regions_with_dn = maps_adjust(non_coding, non_coding$region_with_dn, maps_lm, noncoding = TRUE)
+
+region_maps = maps_adjust(non_coding, non_coding$region_id, maps_lm, noncoding = TRUE)
+
+recurrent_maps = maps_adjust(non_coding, non_coding$recurrent_region, maps_lm, noncoding = TRUE)
+
+maps_ggplot(names(recurrent_maps$ps_adjusted), recurrent_maps$ps_adjusted, recurrent_maps$standard_error)
+maps_ggplot(names(maps_regions_with_dn$ps_adjusted), maps_regions_with_dn$ps_adjusted, maps_regions_with_dn$standard_error)
+
+
+region_maps = data.frame(region_id = names(out$ps_adjusted), maps = out$ps_adjusted)
+
+CNEs$MAPS = region_maps$maps[match(CNEs$region_id, region_maps$region_id)]
+
+constrained_regions = CNEs$region_id[CNEs$MAPS > 0.1]
+non_constrained_regions = CNEs$region_id[CNEs$MACB_Z <= 0.1]
+
+# undiagnosed
+pop = 3112
+lambda_constrained = dpois(x = seq(0, 400), sum(subset(CNEs, CNEs$MAPS > 0.1)$p_snp_null)*pop)
+lambda_non_constrained = dpois(x = seq(0, 500), sum(subset(CNEs, CNEs$MACB_Z <= 0.1)$p_snp_null)*pop)
+
+obs_constrained = nrow(subset(de_novos_cne, (region_id %in% constrained_regions) & diagnosed == FALSE))
+obs_non_constrained = nrow(subset(de_novos_cne, region_id %in% non_constrained_regions & diagnosed == FALSE))
+
+layout(t(c(1,2)))
+poisson_bar_ggplot(lambda_constrained, obs_constrained, main = "Constrained Elements")
+poisson_bar_ggplot(lambda_non_constrained, obs_non_constrained, main = "Non-Constrained Elements")
+
+
+# diagnosed
+pop = 1182
+lambda_constrained = dpois(x = seq(0, 200), sum(subset(CNEs, MACB_Z > 3)$p_snp_null)*pop)
+lambda_non_constrained = dpois(x = seq(0, 400), sum(subset(CNEs, MACB_Z <= 3)$p_snp_null)*pop)
+
+obs_constrained = nrow(subset(de_novos_cne, (region_id %in% constrained_regions) & diagnosed == TRUE))
+obs_non_constrained = nrow(subset(de_novos_cne, region_id %in% non_constrained_regions & diagnosed == TRUE))
+
+layout(t(c(1,2)))
+poisson_bar_ggplot(lambda_constrained, obs_constrained, main = "Constrained Elements")
+poisson_bar_ggplot(lambda_non_constrained, obs_non_constrained, main = "Non-Constrained Elements")
+
+
+```
+
+Check de novo enrichment in elements active in developing tissues:
+
+```{r DHS enrichment, echo = FALSE}
+count_overlaps = function(de_novos, tissue_ids){
+  de_novo_hit_matrix = de_novos[,colnames(de_novos) %in% tissue_ids]
+  count = sum(rowSums(de_novo_hit_matrix) > 1)
+  return(count)
+}
+
+dhs_denovo_sim = read.table("../data/de_novos_cne.1000_simulations.AllRoadmapTissues.sim_added.txt", header = TRUE, sep = "\t")
+dhs_denovo_sim$region_id = get_region_id(dhs_denovo_sim, CNEs)
+dhs_denovo_sim$cne_annotation = CNEs$cne_annotation[match(dhs_denovo_sim$region_id, CNEs$region_id)]
+
+dhs_denovo_observed = read.table("../data/de_novos_cne.4k.AllRoadmapTissues.txt", header = TRUE, sep = "\t")
+colnames(de_novos_cne)[5] = "chr"
+dhs_denovo_observed = merge(de_novos_cne, dhs_denovo_observed, by = c("chr", "pos", "ref", "alt"))
+dhs_denovo_observed$diagnosed = dhs_denovo_observed$person_stable_id %in% diagnosed
+dhs_denovo_observed$region_id = get_region_id(dhs_denovo_observed, CNEs)
+dhs_denovo_observed$cne_annotation = CNEs$cne_annotation[match(dhs_denovo_observed$region_id, CNEs$region_id)]
+
+developmental = c("E082","E081","E002","E008","E015","E014","E016","E007","E009","E010")
+fetal_brain = c("E082","E081")
+fetal_tissue = c("E092","E085", "E084", "E086", "E088", "E083", "E082", "E081")
+muscle = c("E092", "E085", "E084", "E109", "E106", "E075", "E101", "E102", "E110", "E077", "E079", "E094")
+heart = c("E083", "E104", "E095", "E105", "E065")
+digestive = c("E092", "E085", "E084", "E109", "E106", "E075", "E101", "E102", "E110", "E077", "E079", "E094")
+t_cells = c("E062", "E034", "E045", "E033", "E044", "E043", "E039", "E041", "E042", "E040", "E037", "E048", "E038", "E047")
+
+dn_observed = subset(dhs_denovo_observed, cne_annotation != "Heart")
+
+# conserved + enhancer in undiagnosed v. conserved + enhancer in diagnosed
+dn_undiagnosed = subset(dn_observed, diagnosed == FALSE)
+dn_diagnosed = subset(dn_observed, diagnosed == TRUE)
+
+observed_fetal_brain_undiagnosed_counts = count_overlaps(dn_undiagnosed, fetal_brain)
+observed_fetal_brain_diagnosed_counts = count_overlaps(dn_diagnosed, fetal_brain)
+
+dhs_denovo_sim = subset(dhs_denovo_sim, cne_annotation != "Heart")
+iteration_split = split(dhs_denovo_sim, dhs_denovo_sim$iteration)
+
+sim_fetal_brain_counts = sapply(iteration_split, function(dn) count_overlaps(dn, fetal_brain))
+observed_fetal_brain_counts = count_overlaps(dn_observed, fetal_brain)
+sim_hist(sim_fetal_brain_counts, observed_fetal_brain_counts, main = "Fetal Brain DHS")
+
+sim_development_counts = sapply(iteration_split, function(dn) count_overlaps(dn, developmental))
+observed_development_counts = count_overlaps(dn_observed, developmental)
+sim_hist(sim_development_counts, observed_development_counts, main = "Developmental Tissues DHS")
+
+sim_fetal_tissue_counts = sapply(iteration_split, function(dn) count_overlaps(dn, fetal_tissue))
+observed_fetal_tissue_counts = count_overlaps(dn_observed, fetal_tissue)
+sim_hist(sim_fetal_tissue_counts, observed_fetal_tissue_counts, main = "Fetal Tissue DHS")
+
+sim_muscle_counts = sapply(iteration_split, function(dn) count_overlaps(dn, muscle))
+observed_muscle_counts = count_overlaps(dn_observed, muscle)
+sim_hist(sim_muscle_counts, observed_muscle_counts, main = "Muscle DHS")
+
+sim_heart_counts = sapply(iteration_split, function(dn) count_overlaps(dn, heart))
+observed_heart_counts = count_overlaps(dn_observed, heart)
+sim_hist(sim_heart_counts, observed_heart_counts, main = "Heart DHS")
+
+sim_digestive_counts = sapply(iteration_split, function(dn) count_overlaps(dn, digestive))
+observed_digestive_counts = count_overlaps(dn_observed, digestive)
+sim_hist(sim_digestive_counts, observed_digestive_counts, main = "Digestive DHS")
+
+sim_t_cells_counts = sapply(iteration_split, function(dn) count_overlaps(dn, t_cells))
+observed_t_cells_counts = count_overlaps(dn_observed, t_cells)
+sim_hist(sim_t_cells_counts, observed_t_cells_counts, main = "T Cells DHS")
+
+dn_observed$MACB_Z = ddd_noncoding_MACB$MACB_Z[match(dn_observed$region_id, CNEs$region_id)]
+
+fetal_tissue_hit_matrix = dn_observed[,colnames(dn_observed) %in% fetal_tissue]
+in_peak = rowSums(fetal_tissue_hit_matrix) > 1
+dn_fetal_tissues = dn_observed[in_peak,]
+
+# check de novos that are in elements only active in fetal tissues
+fetal_tissue_hit_matrix = dn_observed[,colnames(dn_observed) %in% fetal_tissue]
+in_peak = rowSums(fetal_tissue_hit_matrix) > 1
+
+non_fetal = c(heart, digestive, t_cells, muscle)
+non_fetal = non_fetal[!(non_fetal %in% fetal_tissue)]
+
+non_fetal_hit_matrix = dn_observed[,colnames(dn_observed) %in% non_fetal]
+non_fetal_peak = rowSums(non_fetal_hit_matrix) > 1
+
+dn_fetal_only = dn_observed[in_peak & !non_fetal_peak,]
+
+count_overlaps_fetal_only = function(dn){
+  fetal_tissue_hit_matrix = dn[,colnames(dn) %in% fetal_tissue]
+  fetal_peak = rowSums(fetal_tissue_hit_matrix) > 1
+  non_fetal_tissue_hit_matrix = dn[,!(colnames(dn) %in% fetal_tissue) & (grepl("E0", colnames(dn)) | grepl("E1", colnames(dn)))]
+  non_fetal_peak = rowSums(non_fetal_tissue_hit_matrix) > 1
+  dn_fetal_only = dn[fetal_peak & !non_fetal_peak,]
+  
+  return(dn_fetal_only)
+}
+
+sim_fetal_only_counts = sapply(iteration_split, count_overlaps_fetal_only)
+
+sim_hist(sim_fetal_only_counts, nrow(dn_fetal_only), main = "De Novos in Only Fetal Tissues (Minus Heart, Digestive, T-Cells)")
+
+```
+
+
+Let's create a table of conserved non-coding elements:
+
+```{r CNE table, echo = FALSE}
+
+# include dn_pval, MACB, DHS overlap, distance to target gene, target gene in DDG2P
+de_novos_cne$region_id = get_region_id(de_novos_cne, CNEs)
+
+dn_region_count = table(de_novos_cne$region_id)
+
+element_summary = CNEs[,c("region_id", "MACB_Z", "MAPS", "closest_gene", "distance", "ddg2p", "p_snp_null")]
+element_summary$de_novo_observed = dn_region_count[match(element_summary$region_id, names(dn_region_count))]
+element_summary$de_novo_observed[is.na(element_summary$de_novo_observed)] = 0
+element_summary$dn_p_val = ppois(element_summary$de_novo_observed - 1, element_summary$p_snp_null*4294, lower.tail = FALSE)
+element_summary$fetal_tissue = 
+
+```
+
+
+```{r excess near DDG2P genes, echo = FALSE}
+ddg2p = read.table("../data/DDG2P_freeze_with_gencode19_genomic_coordinates_20141118_fixed.txt", header = TRUE, sep = "\t")
+
+CNEs$ddg2p = CNEs$closest_gene %in% ddg2p$gencode_gene_name
+de_novos_cne$ddg2p = CNEs$ddg2p[match(de_novos_cne$region_id, CNEs$region_id)]
+
+# sets of conserved elements
+CNEs_conserved = subset(CNEs, cne_annotation == "Conserved")
+CNEs_enhancer = subset(CNEs, cne_annotation == "Enhancer")
+CNEs_heart = subset(CNEs, cne_annotation == "Heart")
+CNEs_non_heart = rbind(CNEs_conserved, CNEs_enhancer)
+
+#undiagnosed
+pop = 3112
+lambda_heart_ddg2p = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$ddg2p])*pop)
+lambda_non_heart_ddg2p = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$ddg2p])*pop)
+lambda_heart_non_ddg2p = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!CNEs_heart$ddg2p])*pop)
+lambda_non_heart_non_ddg2p = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$ddg2p])*pop)
+
+obs_heart_ddg2p = nrow(subset(de_novos_cne, cne_annotation == "Heart" & ddg2p == TRUE & diagnosed == FALSE))
+obs_non_heart_ddg2p = nrow(subset(de_novos_cne, cne_annotation != "Heart" & ddg2p == TRUE & diagnosed == FALSE))
+obs_heart_non_ddg2p = nrow(subset(de_novos_cne, cne_annotation == "Heart" & ddg2p == FALSE & diagnosed == FALSE))
+obs_non_heart_non_ddg2p = nrow(subset(de_novos_cne, cne_annotation != "Heart" & ddg2p == FALSE & diagnosed == FALSE))
+
+layout(c(1,2,3,4))
+poisson_bar_ggplot(lambda_heart_ddg2p, obs_heart_ddg2p, main = "Heart + DDG2P")
+poisson_bar_ggplot(lambda_non_heart_ddg2p, obs_non_heart_ddg2p, main = "Enhancer/Conserved + DDG2P")
+poisson_bar_ggplot(lambda_heart_non_ddg2p, obs_heart_non_ddg2p, main = "Heart + Non-DDG2P")
+poisson_bar_ggplot(lambda_non_heart_non_ddg2p, obs_non_heart_non_ddg2p, main = "Enhancer/Conserved + Non-DDG2P")
+
+
+```
+
+df = data.frame(x = seq(0,700), p = dpois(x = seq(0, 700), sum(CNEs$p_snp_null)*4294))
+pval = ppois(nrow(de_novos_cne) - 1, sum(CNEs$p_snp_null)*4294, lower.tail = FALSE)
+
+ggplot(df) + geom_point(aes(x, p)) + geom_vline(xintercept = nrow(de_novos_cne), linetype = "dashed") + xlab("De Novo Count") + ylab("Probability") + theme(plot.title = element_text(size = 16), axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text=element_text(size = 12)) + ggtitle("\nDe Novo Mutation Count in DDD Non-Coding Elements\n")
+
+df = data.frame(x = c(seq(0,500), seq(0,500)), p = c(dpois(x = seq(0, 500), sum(CNEs$p_snp_null)*1182), dpois(x = seq(0, 500), sum(CNEs$p_snp_null)*3112)), diagnosed = c(rep("Diagnosed", 501), rep("Undiagnosed", 501)))
+vline = data.frame(x = c(sum(de_novos_cne$diagnosed), sum(!de_novos_cne$diagnosed)), diagnosed = c("Diagnosed", "Undiagnosed"))
+
+pvals = mapply(function(o, p) ppois(o-1, p, lower.tail = FALSE), vline$x, c(sum(CNEs$p_snp_null)*1182, sum(CNEs$p_snp_null)*3112))
+
+ggplot(df) + geom_point(aes(x, p)) + geom_vline(data = vline, aes(xintercept = x), linetype = "dashed") + facet_wrap(~diagnosed) + xlab("De Novo Count") + ylab("Probability") + theme(plot.title = element_text(size = 16), axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text=element_text(size = 12), strip.text = element_text(size = 14)) + ggtitle("\nDe Novo Mutation Count in DDD Non-Coding Elements\n")
+
+
+df_u = data.frame(x = rep(seq(0,300), 3), p = c(dpois(x = seq(0, 300), sum(CNEs_heart$p_snp_null)*3112), dpois(x = seq(0, 300), sum(CNEs_enhancer$p_snp_null)*3112), dpois(x = seq(0, 300), sum(CNEs_conserved$p_snp_null)*3112)), set = c(rep("Heart", 301), rep("Enhancer", 301), rep("Conserved", 301)))
+df_u$diagnosed = "Undiagnosed"
+
+df_d = data.frame(x = rep(seq(0,300), 3), p = c(dpois(x = seq(0, 300), sum(CNEs_heart$p_snp_null)*1182), dpois(x = seq(0, 300), sum(CNEs_enhancer$p_snp_null)*1182), dpois(x = seq(0, 300), sum(CNEs_conserved$p_snp_null)*1182)), set = c(rep("Heart", 301), rep("Enhancer", 301), rep("Conserved", 301)))
+df_d$diagnosed = "Diagnosed"
+
+df = rbind(df_u, df_d)
+
+df$set = factor(df$set, levels = c("Heart", "Enhancer", "Conserved"), ordered = TRUE)
+
+vline = data.frame(x = c(sum(!de_novos_heart$diagnosed), sum(de_novos_heart$diagnosed), sum(!de_novos_enhancer$diagnosed), sum(de_novos_enhancer$diagnosed), sum(!de_novos_conserved$diagnosed), sum(de_novos_conserved$diagnosed)), set = c(rep("Heart",2), rep("Enhancer",2), rep("Conserved", 2)), diagnosed = rep(c("Undiagnosed", "Diagnosed"), 3))
+
+lambdas = c(sum(CNEs_heart$p_snp_null)*3112, sum(CNEs_heart$p_snp_null)*1182, sum(CNEs_enhancer$p_snp_null)*3112, sum(CNEs_enhancer$p_snp_null)*1182, sum(CNEs_conserved$p_snp_null)*3112, sum(CNEs_conserved$p_snp_null)*1182)
+
+pvals = mapply(function(o, p) ppois(o-1, p, lower.tail = FALSE), vline$x, lambdas)
+
+ggplot(df) + geom_point(aes(x, p)) + geom_vline(data = vline, aes(xintercept = x), linetype = "dashed") + facet_grid(set~diagnosed) + xlab("De Novo Count") + ylab("Probability") + theme(plot.title = element_text(size = 16), axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text=element_text(size = 12), strip.text = element_text(size = 14)) + ggtitle("\nExcess of De Novo Mutations in Ultra-Conserved Elements\n")
+
+```
+
+How many elements are recurrently mutated, and how does this compare to what we would expect under the poisson model?
+
+```{r recurrently mutated elements, echo = FALSE}
+
+de_novo_cnes_undiagnosed = subset(de_novos_cne, diagnosed == FALSE)
+u = table(de_novo_cnes_undiagnosed$region_id)
+u = u[u>1]
+
+u = table(de_novos_conserved$region_id)
+u = u[u>1]
+
+# to simulate probability of recurrent mutation, we will generate probability of n>=2 for each of the gene sets with 4294 (3112)
+# we compare these probabilities to random number generator. if less than p, then we count the element as recurrently mutated.
+
+recurrence_simulation = function(lambdas, iterations) {
+
+  p_recurrent = ppois(1, lambdas, lower.tail = FALSE)  # probability of at least two mutations for each element
+  sim_count = sapply(seq(1:iterations), function(i) sum(runif(length(p_recurrent)) < p_recurrent))
+  return(sim_count)
+  
+}
+
+iterations = 100000
+
+conserved_elements_sim = recurrence_simulation(CNEs_conserved$p_snp_null*4294, iterations)
+conserved_elements_observed = sum(table(de_novos_conserved$region_id) > 1)
+
+enhancer_elements_sim = recurrence_simulation(CNEs_enhancer$p_snp_null*4294, iterations)
+enhancer_elements_observed = sum(table(de_novos_enhancer$region_id) > 1)
+
+heart_elements_sim = recurrence_simulation(CNEs_heart$p_snp_null*4294, iterations)
+heart_elements_observed = sum(table(de_novos_heart$region_id) > 1)
+
+source("../R/visualization.R")
+
+layout(t(c(1,2,3)))
+sim_hist(heart_elements_sim, heart_elements_observed, xlab = "Recurrently Mutated Elements", main = "Heart")
+sim_hist(enhancer_elements_sim, enhancer_elements_observed, xlab = "Recurrently Mutated Elements", main = "Enhancer")
+sim_hist(conserved_elements_sim, conserved_elements_observed, xlab = "Recurrently Mutated Elements", main = "Conserved")
+
+sim_hist(conserved_elements_sim + enhancer_elements_sim, conserved_elements_observed + enhancer_elements_observed, xlab = "Recurrently Mutated Elements", main = "Conserved + Enhancer")
+
+pval_c_e = sum((conserved_elements_observed + enhancer_elements_observed) <= (conserved_elements_sim + enhancer_elements_sim))/iterations
+pval_c = sum(conserved_elements_observed <= conserved_elements_sim)/iterations
+pval_e = sum(enhancer_elements_observed <= enhancer_elements_sim)/iterations
+
+```
+
+Table of recurrently mutated elements with p-value and other relevant information:
+
+```{r recurrently mutated elements, echo=FALSE}
+
+t = table(c(as.character(de_novos_conserved$region_id), as.character(de_novos_enhancer$region_id)))
+t = t[t>1]
+
+u = table(c(as.character(de_novos_conserved$region_id[!de_novos_conserved$diagnosed]), as.character(de_novos_enhancer$region_id[!de_novos_enhancer$diagnosed])))
+
+r = CNEs[CNEs$region_id %in% names(t), c("chr", "start", "stop", "region_id", "cne_annotation", "p_snp_null")]
+r$dn_observed = t[match(as.character(r$region_id), names(t))]
+r$p_observed = ppois(r$dn_observed - 1, r$p_snp_null*4294, lower.tail = FALSE)
+
+r$dn_observed_undiag = u[match(as.character(r$region_id), names(u))]
+r$dn_observed_undiag[is.na(r$dn_observed_undiag)] = 0
+
+r$p_observed_undiag = ppois(r$dn_observed_undiag - 1, r$p_snp_null*3112, lower.tail = FALSE)
+
+```
+
+
+Add constraint scores to the recurrently mutated non-coding elements:
+
+```{r constraint scores, echo = FALSE}
+
+MACB = read.table("../../MACB/data/MACB_non_coding_elements.txt", header=TRUE, sep="\t")
+
+r$MACB_Z = MACB$MACB_Z[match(gsub("chr", "", paste(r$chr, r$start, r$stop, sep = ".")), MACB$region_id)]
+
+
+```
+
+What is the MAPS in the DDD parents in the regions with de novos or recurrent de novos?
+
+```{r MAPS in the recurrently mutated regions}
+
+source('../../dddMAPS/dddMAPS/MAPS.R')
+
+non_coding = read.table("../../MACB/data/DDD_4k_unaff_parents_noncoding_allele_counts.multisample_vcfs.variant_count_qc.CADD.txt", header = TRUE, sep = "\t")
+non_coding = filter_with_bed(non_coding, CNEs)
+non_coding$region_id = get_region_id(non_coding, CNEs)
+
+non_coding$region_with_dn = non_coding$region_id %in% de_novos_conserved$region_id
+
+load("../../dddMAPS/data/DDD_4k_parents_synonymous_maps_lm.RData")
+out = maps_adjust(non_coding, non_coding$region_with_dn, maps_lm, noncoding = TRUE)
+
+```
+
+Are the de novos concentrated near DDG2P genes?
+
+```{r de novos near constrained genes, echo = FALSE}
+ddg2p = read.table("../data/DDG2P_freeze_with_gencode19_genomic_coordinates_20141118_fixed.txt", header = TRUE, sep = "\t")
+ddg2p_mon = subset(ddg2p, allelic_requirement = "Monoallelic" & Mutation_consequence == "Loss of Function")
+
+CNEs = get_closest_gene_to_element(CNEs, gencode)  # take the closest gene
+CNEs$ddg2p = CNEs$closest_gene %in% ddg2p_mon$gencode_gene_name
+CNEs$pLI = exac_pli$pLI[match(CNEs$closest_gene, exac_pli$gene)]
+CNEs$pLI[is.na(CNEs$pLI)] = 0.0  # set missing data to zero
+CNEs$constrained_gene = CNEs$pLI > 0.9
+
+CNEs_conserved = subset(CNEs, cne_annotation == "Conserved")
+CNEs_enhancer = subset(CNEs, cne_annotation == "Enhancer")
+CNEs_heart = subset(CNEs, cne_annotation == "Heart")
+CNEs_non_heart = rbind(CNEs_conserved, CNEs_enhancer)
+
+de_novos_cne$ddg2p = CNEs$ddg2p[match(de_novos_cne$region_id, CNEs$region_id)]
+de_novos_cne$constrained_gene =  CNEs$pLI[match(de_novos_cne$region_id, CNEs$region_id)] > 0.9
+de_novos_conserved = filter_with_bed(de_novos_cne, CNEs_conserved)
+de_novos_enhancer = filter_with_bed(de_novos_cne, CNEs_enhancer)
+de_novos_heart = filter_with_bed(de_novos_cne, CNEs_heart)
+de_novos_non_heart = rbind(de_novos_conserved, de_novos_enhancer)
+
+# hypothesis: there are more non-coding de novos than expected in conserved/enhancer elements near ddg2p genes
+
+# order listed: heart non-ddg2p, cons + enh non-ddg2p, heart ddg2p, cons + enh ddg2p
+df_ddg2p = data.frame(x = rep(seq(0,400), 4), p = c(dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!CNEs_heart$ddg2p])*3112), dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$ddg2p])*3112), dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$ddg2p])*3112), dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$ddg2p])*3112)), set = c(rep("Heart", 401), rep("Conserved + Enhancer", 401), rep("Heart", 401), rep("Conserved + Enhancer", 401)), ddg2p = c(rep("Non-DDG2P", 802), rep("DDG2P", 802)))
+
+df_ddg2p$set = factor(df_ddg2p$set, levels = c("Heart", "Conserved + Enhancer"), ordered = TRUE)
+
+vline = data.frame(x = c(sum(!de_novos_heart$ddg2p), sum(!de_novos_non_heart$ddg2p), sum(de_novos_heart$ddg2p), sum(de_novos_non_heart$ddg2p)), set = rep(c("Heart","Conserved + Enhancer"),2), ddg2p = c(rep("Non-DDG2P",2), rep("DDG2P", 2)))
+
+lambdas = c(sum(CNEs_heart$p_snp_null[!CNEs_heart$ddg2p])*3112, sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$ddg2p])*3112, sum(CNEs_heart$p_snp_null[CNEs_heart$ddg2p])*3112, sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$ddg2p])*3112)
+
+pvals = mapply(function(o, p) ppois(o-1, p, lower.tail = FALSE), vline$x, lambdas)
+
+ggplot(df_ddg2p) + geom_point(aes(x, p)) + geom_vline(data = vline, aes(xintercept = x), linetype = "dashed") + facet_grid(ddg2p~set) + xlab("De Novo Count") + ylab("Probability") + theme(plot.title = element_text(size = 16), axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text=element_text(size = 12), strip.text = element_text(size = 14)) + ggtitle("\nExcess of De Novo Mutations in Ultra-Conserved Elements\n")
+
+
+```
+
+Are the de novos concentrated near highly constrained genes?
+
+```{r de novos near constrained genes, echo = FALSE}
+
+# order listed: heart non-constrained_gene, cons + enh non-constrained_gene, heart constrained_gene, cons + enh constrained_gene
+df_constrained_gene = data.frame(x = rep(seq(0,400), 4), p = c(dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!CNEs_heart$constrained_gene])*3112), dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$constrained_gene])*3112), dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$constrained_gene])*3112), dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene])*3112)), set = c(rep("Heart", 401), rep("Conserved + Enhancer", 401), rep("Heart", 401), rep("Conserved + Enhancer", 401)), constrained_gene = c(rep("Non-constrained_gene", 802), rep("constrained_gene", 802)))
+
+df_constrained_gene$set = factor(df_constrained_gene$set, levels = c("Heart", "Conserved + Enhancer"), ordered = TRUE)
+
+vline = data.frame(x = c(sum(!de_novos_heart$constrained_gene), sum(!de_novos_non_heart$constrained_gene), sum(de_novos_heart$constrained_gene), sum(de_novos_non_heart$constrained_gene)), set = rep(c("Heart","Conserved + Enhancer"),2), constrained_gene = c(rep("Non-constrained_gene",2), rep("constrained_gene", 2)))
+
+lambdas = c(sum(CNEs_heart$p_snp_null[!CNEs_heart$constrained_gene])*3112, sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$constrained_gene])*3112, sum(CNEs_heart$p_snp_null[CNEs_heart$constrained_gene])*3112, sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene])*3112)
+
+pvals = mapply(function(o, p) ppois(o-1, p, lower.tail = FALSE), vline$x, lambdas)
+
+ggplot(df_constrained_gene) + geom_point(aes(x, p)) + geom_vline(data = vline, aes(xintercept = x), linetype = "dashed") + facet_grid(constrained_gene~set) + xlab("De Novo Count") + ylab("Probability") + theme(plot.title = element_text(size = 16), axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text=element_text(size = 12), strip.text = element_text(size = 14)) + ggtitle("\nExcess of De Novo Mutations in Ultra-Conserved Elements\n")
+
+
+```
+
+How about constrained DDG2P genes?
+
+```{r de novos near constrained ddg2p genes, echo = FALSE}
+
+# order listed: heart non-constrained_gene, cons + enh non-constrained_gene, heart constrained_gene, cons + enh constrained_gene
+df_constrained_gene = data.frame(x = rep(seq(0,400), 4), p = c(dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!(CNEs_heart$constrained_gene) & CNEs_heart$ddg2p])*3112), dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!(CNEs_non_heart$constrained_gene) & CNEs_non_heart$ddg2p])*3112), dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$constrained_gene & CNEs_heart$ddg2p])*3112), dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene & CNEs_non_heart$ddg2p])*3112)), set = c(rep("Heart", 401), rep("Conserved + Enhancer", 401), rep("Heart", 401), rep("Conserved + Enhancer", 401)), constrained_gene = c(rep("Non-Constrained DDG2P", 802), rep("Constrained DDG2P", 802)))
+
+df_constrained_gene$set = factor(df_constrained_gene$set, levels = c("Heart", "Conserved + Enhancer"), ordered = TRUE)
+
+vline = data.frame(x = c(sum(!(de_novos_heart$constrained_gene) & de_novos_heart$ddg2p), sum(!(de_novos_non_heart$constrained_gene) & de_novos_non_heart$ddg2p), sum(de_novos_heart$constrained_gene & de_novos_heart$ddg2p), sum(de_novos_non_heart$constrained_gene & de_novos_non_heart$ddg2p)), set = rep(c("Heart","Conserved + Enhancer"),2), constrained_gene = c(rep("Non-Constrained DDG2P",2), rep("Constrained DDG2P", 2)))
+
+lambdas = c(sum(CNEs_heart$p_snp_null[!CNEs_heart$constrained_gene])*3112, sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$constrained_gene])*3112, sum(CNEs_heart$p_snp_null[CNEs_heart$constrained_gene])*3112, sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene])*3112)
+
+pvals = mapply(function(o, p) ppois(o-1, p, lower.tail = FALSE), vline$x, lambdas)
+
+ggplot(df_constrained_gene) + geom_point(aes(x, p)) + geom_vline(data = vline, aes(xintercept = x), linetype = "dashed") + facet_grid(constrained_gene~set) + xlab("De Novo Count") + ylab("Probability") + theme(plot.title = element_text(size = 16), axis.text = element_text(size = 14), axis.title = element_text(size = 16), legend.text=element_text(size = 12), strip.text = element_text(size = 14)) + ggtitle("\nExcess of De Novo Mutations in Ultra-Conserved Elements\n")
+
+
+```
+
+
+To visualize all of this at once:
+
+```{r observed versus expected box plots, echo = FALSE}
+
+de_novos_cne$cne_annotation = CNEs$cne_annotation[match(de_novos_cne$region_id, CNEs$region_id)]
+
+poisson_bar_ggplot <- function(p, obs, main){
+  
+  p = p[1:(obs+51)]
+  counts = unlist(mapply(function(count, times) rep(count, times), seq(0, obs+50), round(1000000*p)))
+  sim_hist(counts, obs, main = main)
+  
+}
+
+de_novo_observation_plot <- function(de_novos, pop){
+  
+  # heart, enhancer, conserved
+  l_heart = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null)*pop)
+  l_enhancer = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null)*pop)
+  l_conserved = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null)*pop)
+  l_non_heart = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null)*pop)
+  
+  obs_heart = nrow(subset(de_novos, cne_annotation == "Heart"))
+  obs_enhancer = nrow(subset(de_novos, cne_annotation == "Enhancer"))
+  obs_conserved = nrow(subset(de_novos, cne_annotation == "Conserved"))
+  obs_non_heart = nrow(subset(de_novos, cne_annotation %in% c("Conserved", "Enhancer")))
+
+  # ddg2p
+  l_heart_ddg2p = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$ddg2p])*pop)
+  l_enhancer_ddg2p = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null[CNEs_enhancer$ddg2p])*pop)
+  l_conserved_ddg2p = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null[CNEs_conserved$ddg2p])*pop)
+
+  obs_heart_ddg2p = nrow(subset(de_novos, cne_annotation == "Heart" & ddg2p == TRUE))
+  obs_enhancer_ddg2p = nrow(subset(de_novos, cne_annotation == "Enhancer" & ddg2p == TRUE))
+  obs_conserved_ddg2p = nrow(subset(de_novos, cne_annotation == "Conserved" & ddg2p == TRUE))
+  
+  # constrained/non-constrained
+  l_heart_constrained_gene = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$constrained_gene])*pop)
+  l_enhancer_constrained_gene = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null[CNEs_enhancer$constrained_gene])*pop)
+  l_conserved_constrained_gene = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null[CNEs_conserved$constrained_gene])*pop)
+
+  obs_heart_constrained_gene = nrow(subset(de_novos, cne_annotation == "Heart" & constrained_gene == TRUE))
+  obs_enhancer_constrained_gene = nrow(subset(de_novos, cne_annotation == "Enhancer" & constrained_gene == TRUE))
+  obs_conserved_constrained_gene = nrow(subset(de_novos, cne_annotation == "Conserved" & constrained_gene == TRUE))
+  
+  # constrained ddg2p 
+  l_heart_constrained_ddg2p = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$constrained_gene & CNEs_heart$ddg2p])*pop)
+  l_enhancer_constrained_ddg2p = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null[CNEs_enhancer$constrained_gene & CNEs_enhancer$ddg2p])*pop)
+  l_conserved_constrained_ddg2p = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null[CNEs_conserved$constrained_gene & CNEs_conserved$ddg2p])*pop)
+
+  obs_heart_constrained_ddg2p = nrow(subset(de_novos, cne_annotation == "Heart" & constrained_gene == TRUE & ddg2p == TRUE))
+  obs_enhancer_constrained_ddg2p = nrow(subset(de_novos, cne_annotation == "Enhancer" & constrained_gene == TRUE & ddg2p == TRUE))
+  obs_conserved_constrained_ddg2p = nrow(subset(de_novos, cne_annotation == "Conserved" & constrained_gene == TRUE & ddg2p == TRUE))
+  
+  # non-constrained ddg2p
+  l_heart_non_constrained_ddg2p = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!CNEs_heart$constrained_gene & CNEs_heart$ddg2p])*pop)
+  l_enhancer_non_constrained_ddg2p = dpois(x = seq(0, 400), sum(CNEs_enhancer$p_snp_null[!CNEs_enhancer$constrained_gene & CNEs_enhancer$ddg2p])*pop)
+  l_conserved_non_constrained_ddg2p = dpois(x = seq(0, 400), sum(CNEs_conserved$p_snp_null[!CNEs_conserved$constrained_gene & CNEs_conserved$ddg2p])*pop)
+
+  obs_heart_non_constrained_ddg2p = nrow(subset(de_novos, cne_annotation == "Heart" & constrained_gene == FALSE & ddg2p == TRUE))
+  obs_enhancer_non_constrained_ddg2p = nrow(subset(de_novos, cne_annotation == "Enhancer" & constrained_gene == FALSE & ddg2p == TRUE))
+  obs_conserved_non_constrained_ddg2p = nrow(subset(de_novos, cne_annotation == "Conserved" & constrained_gene == FALSE & ddg2p == TRUE))
+
+
+  layout(matrix(seq(1,9), byrow = TRUE, ncol = 3))
+  poisson_bar_ggplot(l_heart, obs_heart, main = "Heart")
+  poisson_bar_ggplot(l_enhancer, obs_enhancer, main = "Enhancer")
+  poisson_bar_ggplot(l_conserved, obs_conserved, main = "Conserved")
+  
+  poisson_bar_ggplot(l_heart_ddg2p, obs_heart_ddg2p, main = "Heart + DDG2P")
+  poisson_bar_ggplot(l_enhancer_ddg2p, obs_enhancer_ddg2p, main = "Enhancer + DDG2P")
+  poisson_bar_ggplot(l_conserved_ddg2p, obs_conserved_ddg2p,  main = "Conserved + DDG2P")
+  
+  poisson_bar_ggplot(l_heart_constrained_gene, obs_heart_constrained_gene, main =  "Heart + constrained_gene")
+  poisson_bar_ggplot(l_enhancer_constrained_gene, obs_enhancer_constrained_gene, main =  "Enhancer + constrained_gene")
+  poisson_bar_ggplot(l_conserved_constrained_gene, obs_conserved_constrained_gene, main = "Conserved + constrained_gene")
+  
+  layout(matrix(seq(1,9), byrow = TRUE, ncol = 3))
+  poisson_bar_ggplot(l_heart, obs_heart, main = "Heart")
+  poisson_bar_ggplot(l_enhancer, obs_enhancer, main = "Enhancer")
+  poisson_bar_ggplot(l_conserved, obs_conserved, main = "Conserved")
+  
+  poisson_bar_ggplot(l_heart_constrained_ddg2p, obs_heart_constrained_ddg2p, main = "Heart + DDG2P + Constrained")
+  poisson_bar_ggplot(l_enhancer_constrained_ddg2p, obs_enhancer_constrained_ddg2p, main = "Enhancer + DDG2P + Constrained")
+  poisson_bar_ggplot(l_conserved_constrained_ddg2p, obs_conserved_constrained_ddg2p,  main = "Conserved + DDG2P + Constrained")
+  
+  poisson_bar_ggplot(l_heart_non_constrained_ddg2p, obs_heart_non_constrained_ddg2p, main =  "Heart + DDG2P + NOT Constrained")
+  poisson_bar_ggplot(l_enhancer_non_constrained_ddg2p, obs_enhancer_non_constrained_ddg2p, main =  "Enhancer + DDG2P + NOT Constrained")
+  poisson_bar_ggplot(l_conserved_non_constrained_ddg2p, obs_conserved_non_constrained_ddg2p, main = "Conserved + DDG2P + NOT Constrained")
+  
+}
+
+pop = 3112
+l_heart_u = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null)*pop)
+l_non_heart_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null)*pop)
+l_heart_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$ddg2p])*pop)
+l_non_heart_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$ddg2p])*pop)
+l_heart_non_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!CNEs_heart$ddg2p])*pop)
+l_non_heart_non_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$ddg2p])*pop)
+
+l_non_heart_constrained_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene])*pop)
+l_non_heart_non_constrained_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$constrained_gene])*pop)
+
+l_non_heart_constrained_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene & CNEs_non_heart$ddg2p])*pop)
+l_non_heart_non_constrained_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$constrained_gene & CNEs_non_heart$ddg2p])*pop)
+l_non_heart_constrained_non_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$constrained_gene & !CNEs_non_heart$ddg2p])*pop)
+l_non_heart_non_constrained_non_ddg2p_u = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$constrained_gene & !CNEs_non_heart$ddg2p])*pop)
+
+
+obs_heart_u = nrow(subset(de_novos_cne, cne_annotation == "Heart" & diagnosed == FALSE))
+obs_non_heart_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & diagnosed == FALSE))
+
+obs_heart_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation == "Heart" & ddg2p == TRUE & diagnosed == FALSE))
+obs_non_heart_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & ddg2p == TRUE & diagnosed == FALSE))
+obs_heart_non_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation == "Heart" & ddg2p != TRUE & diagnosed == FALSE))
+obs_non_heart_non_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & ddg2p != TRUE & diagnosed == FALSE))
+
+obs_non_heart_constrained_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & constrained_gene == TRUE & diagnosed == FALSE))
+obs_non_heart_non_constrained_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & constrained_gene != TRUE & diagnosed == FALSE))
+
+obs_non_heart_constrained_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & constrained_gene == TRUE & ddg2p == TRUE & diagnosed == FALSE))
+obs_non_heart_non_constrained_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & constrained_gene != TRUE & ddg2p == TRUE & diagnosed == FALSE))
+obs_non_heart_constrained_non_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & constrained_gene == TRUE & ddg2p == FALSE & diagnosed == FALSE))
+obs_non_heart_non_constrained_non_ddg2p_u = nrow(subset(de_novos_cne, cne_annotation != "Heart" & constrained_gene != TRUE & ddg2p == FALSE & diagnosed == FALSE))
+
+
+# showing where excesses lie
+poisson_bar_ggplot(l_non_heart_u, obs_non_heart_u, main = "Enhancer + Conserved (Undiagnosed)")
+
+poisson_bar_ggplot(l_non_heart_ddg2p_u, obs_non_heart_ddg2p_u, main = "Enhancer + Conserved (Undiagnosed)\nDDG2P Genes")
+poisson_bar_ggplot(l_non_heart_non_ddg2p_u, obs_non_heart_non_ddg2p_u, main = "Enhancer + Conserved (Undiagnosed)\nNon-DDG2P Genes")
+
+poisson_bar_ggplot(l_non_heart_constrained_u, obs_non_heart_constrained_u, main = "Enhancer + Conserved (Undiagnosed)\nConstrained Genes")
+poisson_bar_ggplot(l_non_heart_non_constrained_u, obs_non_heart_non_constrained_u, main = "Enhancer + Conserved (Undiagnosed)\nNon-Constrained Genes")
+
+poisson_bar_ggplot(l_non_heart_constrained_ddg2p_u, obs_non_heart_constrained_ddg2p_u, main = "Enhancer + Conserved (Undiagnosed)\nConstrained DDG2P")
+poisson_bar_ggplot(l_non_heart_non_constrained_ddg2p_u, obs_non_heart_non_constrained_ddg2p_u, main = "Enhancer + Conserved (Undiagnosed)\nNon-Constrained DDG2P")
+poisson_bar_ggplot(l_non_heart_constrained_non_ddg2p_u, obs_non_heart_constrained_non_ddg2p_u, main = "Enhancer + Conserved (Undiagnosed)\nConstrained Non-DDG2P")
+poisson_bar_ggplot(l_non_heart_non_constrained_non_ddg2p_u, obs_non_heart_non_constrained_non_ddg2p_u, main = "Enhancer + Conserved (Undiagnosed)\nNon-Constrained Non-DDG2P")
+
+
+pop = 1182
+l_heart_d = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null)*pop)
+l_non_heart_d = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null)*pop)
+l_heart_ddg2p_d = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[CNEs_heart$ddg2p])*pop)
+l_non_heart_ddg2p_d = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[CNEs_non_heart$ddg2p])*pop)
+l_heart_non_ddg2p_d = dpois(x = seq(0, 400), sum(CNEs_heart$p_snp_null[!CNEs_heart$ddg2p])*pop)
+l_non_heart_ddg2p_d = dpois(x = seq(0, 400), sum(CNEs_non_heart$p_snp_null[!CNEs_non_heart$ddg2p])*pop)
+
+obs_heart_d = nrow(subset(de_novos_cne, cne_annotation == "Heart" & diagnosed == TRUE))
+obs_non_heart_d = nrow(subset(de_novos_cne, cne_annotation %in% c("Conserved", "Enhancer") & diagnosed == TRUE))
+
+layout(matrix(seq(1,4), byrow = TRUE, ncol = 2))
+poisson_bar_ggplot(l_heart_d, obs_heart_d, main = "Heart (Diagnosed)")
+poisson_bar_ggplot(l_non_heart_d, obs_non_heart_d, main = "Enhancer + Conserved (Diagnosed)")
+poisson_bar_ggplot(l_heart_u, obs_heart_u, main = "Heart (Undiagnosed)")
+poisson_bar_ggplot(l_non_heart_u, obs_non_heart_u, main = "Enhancer + Conserved (Undiagnosed)")
+
+
+```
+

@@ -1,0 +1,269 @@
+# process de novos and various annotations using GRanges
+
+require(GenomicRanges)
+
+genomicus_target_gene <- function(de_novos, genomicus){
+  dn = GRanges(seqnames=Rle(paste0("chr", de_novos$chr)), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  gen = GRanges(seqnames=Rle(paste0("chr", genomicus$CREs_chr.1)), ranges = IRanges(start = genomicus$Start.hg19.6., end = genomicus$End.hg19.7.))
+  mcols(gen) = genomicus[ , c("Predicted.target.20.")]
+
+  # find overlap between denovos and genomicus annotation
+  hits = findOverlaps(dn, gen)
+  dn_hits_idx = queryHits(hits) # get index of de novos with genomicus hit
+  gen_hits_idx = subjectHits(hits) # get index of genomicus ranges to retrieve target gene
+
+  target_genes = rep("NONE", nrow(de_novos))
+
+  # all de novos with no genom. target will remain NONE
+  target_genes[dn_hits_idx] = gsub(" $", "", as.character(genomicus$Predicted.target.20.[gen_hits_idx]))
+
+  return(target_genes)
+}
+
+count_genomicus_hits <- function(de_novos, genomicus){
+  dn = GRanges(seqnames=Rle(paste0("chr", de_novos$chr)), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  gen = GRanges(seqnames=Rle(paste0("chr", genomicus$CREs_chr.1.)), ranges = IRanges(start = genomicus$Start.hg19.6., end = genomicus$End.hg19.7.))
+
+  # find overlap between denovos and genomicus annotation
+  hits = findOverlaps(dn, gen)
+  dn_hits_idx = unique(queryHits(hits)) # get index of de novos with genomicus hit
+
+  count = length(dn_hits_idx)
+
+  return(count)
+}
+
+genomicus_conservation_scores <- function(de_novos, genomicus){
+  dn = GRanges(seqnames=Rle(paste0("chr", de_novos$chr)), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  gen = GRanges(seqnames=Rle(paste0("chr", genomicus$CREs_chr.1.)), ranges = IRanges(start = genomicus$Start.hg19.6., end = genomicus$End.hg19.7.))
+
+  # find overlap between denovos and genomicus annotation
+  hits = findOverlaps(dn, gen)
+  genomicus_CNEs_idx = subjectHits(hits) # get index of de novos with genomicus hit
+  conservation_scores = genomicus$Conservation.score..12.[genomicus_CNEs_idx]
+
+  return(conservation_scores)
+
+}
+
+count_bed_hits <- function(de_novos, bed){
+  # assumes that the bed input has at least three columns with chr, start, end as the first three (all others ignored)
+  dn = GRanges(seqnames=Rle(paste0("chr", de_novos$chr)), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  gen = GRanges(seqnames=Rle(bed[,1]), ranges = IRanges(start = bed[,2], end = bed[,3]))
+
+  # find overlap between denovos and genomicus annotation
+  hits = findOverlaps(dn, gen)
+  dn_hits_idx = queryHits(hits) # get index of de novos with genomicus hit
+
+  count = length(dn_hits_idx)
+
+  return(count)
+}
+
+filter_with_bed <- function(de_novos, bed){
+  # assumes that the bed input has at least three columns with chr, start, end as the first three (all others ignored)
+
+  if (any(!grepl("^chr", de_novos$chr))) {
+    de_novos$chr = paste0("chr", de_novos$chr)
+  }
+  if (any(!grepl("^chr", bed[,1]))) {
+    bed[ ,1] = paste0("chr", bed[ ,1])
+  }
+
+  dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$pos, end = de_novos$pos))
+  gen = GRanges(seqnames=Rle(bed[,1]), ranges = IRanges(start = bed[,2], end = bed[,3]))
+
+  # find overlap between denovos and genomicus annotation
+  hits = findOverlaps(dn, gen)
+  dn_hits_idx = unique(queryHits(hits)) # get index of de novos with genomicus hit
+
+  de_novos = de_novos[dn_hits_idx, ]
+
+  return(de_novos)
+}
+
+overlap_with_bed <- function(regions, bed){
+  # assumes that the bed input has at least three columns with chr, start, end as the first three (all others ignored)
+  reg = GRanges(seqnames=Rle(regions$chr), ranges = IRanges(start = regions$start, end = regions$stop))
+  bed = GRanges(seqnames=Rle(bed[,1]), ranges = IRanges(start = bed[,2], end = bed[,3]))
+
+  # intersect regions with bed range (i.e. genomicus)
+  reg_bed_overlap = intersect(reg, bed)
+  reg = data.frame(chr = as.character(reg_bed_overlap@seqnames),
+                   start = as.integer(reg_bed_overlap@ranges@start),
+                   stop = as.integer(reg_bed_overlap@ranges@start + reg_bed_overlap@ranges@width - 1))
+  reg$region_id <- paste(reg$chr, reg$start, reg$stop, sep = ".")
+
+  return(reg)
+}
+
+
+split_to_json <- function(de_novos, by){
+  probands_by_factor = split(de_novos$person_stable_id, de_novos[, by])
+  probands_by_factor = Filter(function(x) length(x) > 0, probands_by_factor)
+  region_json = toJSON(probands_by_factor, pretty = TRUE)
+  save_name = sprintf("../data/probands_by_%s.json", by)
+  sink(save_name)
+  cat(region_json)
+  sink()
+}
+
+# get pLI based on exac data set
+exac_pli = read.table("../data/exac_pLI.txt", sep = "\t", header = TRUE)
+
+gene_pli = function(gene_name){
+  if (gene_name %in% exac_pli$gene){
+    pli = as.numeric(subset(exac_pli, gene == gene_name)$pLI)
+  } else {
+    pli = 0
+  }
+  return(pli)
+}
+
+get_closest_gene <- function(de_novos, CNEs){
+  # assumes that the CNE input has at least three columns with chr, start, end as the first three (all others ignored)
+
+  if (any(!grepl("^chr", de_novos$chr))) {
+    de_novos$chr = paste0("chr", de_novos$chr)
+  }
+  if (any(!grepl("^chr", CNEs$chr))) {
+    CNEs$chr = paste0("chr", CNEs$chr)
+  }
+
+  if ("end" %in% colnames(de_novos)){ # region instead of de novos - use the first position of the region to get closest gene!
+    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$start, end = de_novos$start + 1))
+  } else {
+    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  }
+
+  cne = GRanges(seqnames=Rle(CNEs$chr), ranges = IRanges(start = CNEs$start, end = CNEs$stop))
+
+  # find overlap between denovos and annotated CNEs
+  hits = findOverlaps(dn, cne)
+  dn_hits_idx = queryHits(hits) # get index of de novos
+  CNE_hits_idx = subjectHits(hits) # get index of CNEs
+
+  closest_gene = CNEs$closest_gene[CNE_hits_idx]
+
+  return(closest_gene)
+}
+
+get_CNE_annotation <- function(de_novos, CNEs){
+  # assumes that the CNE input has at least three columns with chr, start, end as the first three (all others ignored)
+
+  if (any(!grepl("^chr", de_novos$chr))) {
+    de_novos$chr = paste0("chr", de_novos$chr)
+  }
+  if (any(!grepl("^chr", CNEs$chr))) {
+    CNEs$chr = paste0("chr", CNEs$chr)
+  }
+
+  if ("end" %in% colnames(de_novos)){ # region instead of de novos - use the first position of the region to get closest gene!
+    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$start, end = de_novos$start + 1))
+  } else {
+    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  }
+
+  cne = GRanges(seqnames=Rle(CNEs$chr), ranges = IRanges(start = CNEs$start, end = CNEs$stop))
+
+  # find overlap between denovos and annotated CNEs
+  hits = findOverlaps(dn, cne)
+  dn_hits_idx = queryHits(hits) # get index of de novos
+  CNE_hits_idx = subjectHits(hits) # get index of CNEs
+
+  enhancer = CNEs$enhancer[CNE_hits_idx]
+  conserved = CNEs$conserved[CNE_hits_idx]
+  heart = CNEs$heart[CNE_hits_idx]
+
+  # assumption in these cases is that information quality is enhancer > heart > conserved
+  case1 = enhancer == 1 # call this enhancers
+  case2 = conserved == 1 & enhancer == 0 | conserved == 1 & heart == 0 # these are only high phastcons score
+  case3 = heart == 1 & enhancer == 0 # heart set - implied that conserved could be 1 or 0
+
+  annotation = rep("NONE", length(CNE_hits_idx))
+  annotation[case1] = "Enhancer"
+  annotation[case2] = "Conserved"
+  annotation[case3] = "Heart"
+
+  return(annotation)
+}
+
+get_region_id <- function(de_novos, CNEs){
+  # assumes that the CNE input has at least three columns with chr, start, end as the first three (all others ignored)
+
+  if (any(!grepl("^chr", de_novos$chr))) {
+    de_novos$chr = paste0("chr", de_novos$chr)
+  }
+  if (any(!grepl("^chr", CNEs$chr))) {
+    CNEs$chr = paste0("chr", CNEs$chr)
+  }
+
+  if ("end" %in% colnames(de_novos)){ # region instead of de novos - use the first position of the region to get closest gene!
+    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$start, end = de_novos$start + 1))
+  } else {
+    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+  }
+
+  cne = GRanges(seqnames=Rle(CNEs$chr), ranges = IRanges(start = CNEs$start, end = CNEs$stop))
+
+  # find overlap between denovos and annotated CNEs
+  hits = findOverlaps(dn, cne)
+  dn_hits_idx = queryHits(hits) # get index of de novos
+  CNE_hits_idx = subjectHits(hits) # get index of CNEs
+
+
+  return(CNEs$region_id[CNE_hits_idx])
+}
+
+get_sequence <- function(chr, start, stop, version = "hg19") {
+
+  # input: (multiple) chr, start, stop, hg version (defaults to hg19)
+  # output: list of sequences as DNAStrings object for each input
+
+  if (version == "hg19"){
+    library(BSgenome.Hsapiens.UCSC.hg19)
+  } else if (version == "hg18"){
+    library(BSgenome.Hsapiens.UCSC.hg18) # TODO need to add download of hg18 to build.R
+  }
+
+  if (!all(grepl(pattern = "^chr", chr))){  # assert that chromosome column have chr in front
+    warning("Not all entries in the chromosome column start with \"chr\" - try reformatting this column e.g. \"chrX\" instead of \"X\" with paste0(\"chr\",chr_number")
+    chr = paste0("chr", chr)
+  }
+
+  seqs = getSeq(Hsapiens, chr, start, stop)
+  return(seqs)
+}
+
+
+sim_observed_slice = function(de_novos, sim_de_novos, split_by_diagnosis = TRUE, factor1 = NULL, factor2 = NULL){
+ u = subset(de_novos, diagnosed == FALSE)
+ d = subset(de_novos, diagnosed == TRUE)
+
+ if (!is.null(factor1)){
+   u_factor1 = subset(u, u[,factor] == TRUE)
+   u_not_factor1 = subset(u, u[,factor] == FALSE)
+   d_factor1 = subset(u, u[,factor] == TRUE)
+   d_not_factor1 = subset(u, u[,factor] == FALSE)
+   if (!is.null(factor2)){
+     u_factor12 = subset(u_factor1, u[,factor] == TRUE)
+     u_factor1only = subset(u, u[,factor] == TRUE)
+     u_factor2only = subset(u, u[,factor] == TRUE)
+     u_no_factors = subset(u, u[,factor] == TRUE)
+     u_factor12 = subset(u, u[,factor] == TRUE)
+     u_factor1only = subset(u, u[,factor] == TRUE)
+     u_factor2only = subset(u, u[,factor] == TRUE)
+     u_no_factors = subset(u, u[,factor] == TRUE)
+
+
+   }
+ }
+
+
+
+}
+
+
+
+
+

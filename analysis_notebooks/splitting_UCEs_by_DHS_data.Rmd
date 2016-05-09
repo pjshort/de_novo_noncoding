@@ -1,0 +1,81 @@
+---
+title: "Splitting Regions by DHS Data"
+author: "Patrick Short"
+date: "19 February 2016"
+output: html_document
+---
+
+
+```{r load DHS data and simulated de novos, echo = FALSE}
+library(stringr)
+library(GenomicRanges)
+source("../R/annotation_tools.R")
+
+
+```
+
+We can use the DHSs in two different ways. First, we can group entire elements as active/inactive in a particular tissue if they overlap/do not overlap a Dnase peak in that tissue. Second, we can look for strict overlap of de novo mutations and rare variants themselves.
+
+We are interested in several questions in particular:
+1. Is there a burden of de novo mutations within DHS peaks from brain/developmental states?
+2. Is there a burden of de novo mutations within elements marked as 'active' in developmental states?
+3. Is there a burden of de novo mutations in transcription factors that are relevant to brain/development?
+4. Is the signal in question three strengthened, or weakened by requiring overlap with brain/developmental DHS peaks or brain/developmental elements?
+5. Are there any motifs that are significantly enriched in these elements? If so, do these motifs show a burden of de novo mutations or monoallelic rare variants?
+
+
+Defining elements as active in brain or development using dynamicTreeCut to cut the hierarchichal cluster made from binary overlaps with DHS.
+
+```{r simple overlap with developmental DHS, echo = FALSE}
+library(dynamicTreeCut)
+library(RColorBrewer)
+library(gplots)
+s = as.matrix(all_conserved)
+tissue_name = id_to_tissue$V2[match(colnames(s), id_to_tissue$V1)]
+
+colnames(s) = tissue_name
+rownames(s) <- rep("", length(row.names(s)))
+
+dhs_clust = hclust(dist(s))
+
+# deepSplit = 0 controls sensitivity to make larger clusters (and avoid over-splitting)
+c = cutreeDynamic(dhs_clust, deepSplit = 0, method = "tree", minClusterSize = 20)
+
+# colors for heatmap
+my_palette <- colorRampPalette(c("white", "steelblue"))(n = 299)
+
+# color for hierarchichal cluster
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+my_colors = colorRampPalette(cbbPalette)(length(unique(c)))
+region_cluster_colors = my_colors[c]
+
+# color for tissues
+tissue_labels = c(rep("Brain",10), rep("Heart", 5), rep("ES Cells", 8), rep("ES-derived Tissues", 9), rep("Muscle", 5), rep("Stomach", 11), rep("T-Cells", 15))
+tissue_color = brewer.pal(length(unique(tissue_labels)), "Accent")
+tissue_label_colors = unlist(mapply(function(color, times) rep(color, times), tissue_color, table(tissue_labels)))
+
+# makes 0's very close to zero but non-zero (helps with R not crashing)
+s = ifelse(s, 1.0, runif(dim(s)[1]*dim(s)[2], min = 0.00, max = 0.01))
+
+options(expressions = 20000)
+heatmap.2(s,
+  main = "DHS Peaks in DDD UCEs", # heat map title
+  Rowv = as.dendrogram(dhs_clust),          # cluster is already done for rows by hclust
+  Colv = TRUE,
+  notecol="black",      # change font color of cell labels to black
+  density.info="none",  # turns off density plot inside color legend
+  key = TRUE,
+  trace="none",         # turns off trace lines inside the heat map
+  margins =c(16,8),     # widens margins around plot
+  col=my_palette,       # use on color palette defined earlier 
+  dendrogram="both",     # only draw a column dendrogram
+  offsetRow = -0.1,
+  labRow = NA, ylab = "DDD Ultra-Conserved Elements",
+  RowSideColors = region_cluster_colors,
+  ColSideColors = tissue_label_colors)
+
+legend(0.8, 1.07, legend = names(table(tissue_labels)), fill=c(tissue_color), border=FALSE, xpd = TRUE, bty="n", y.intersp = 0.7, cex=0.5)
+
+```
+
+
