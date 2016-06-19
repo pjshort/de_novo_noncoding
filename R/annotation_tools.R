@@ -124,16 +124,16 @@ get_closest_gene <- function(de_novos, CNEs){
   # assumes that the CNE input has at least three columns with chr, start, end as the first three (all others ignored)
 
   if (any(!grepl("^chr", de_novos$chr))) {
-    de_novos$chr = paste0("chr", de_novos$chr)
+    vars$chr = paste0("chr", vars$chr)
   }
   if (any(!grepl("^chr", CNEs$chr))) {
     CNEs$chr = paste0("chr", CNEs$chr)
   }
 
-  if ("end" %in% colnames(de_novos)){ # region instead of de novos - use the first position of the region to get closest gene!
-    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$start, end = de_novos$start + 1))
+  if ("end" %in% colnames(vars)){ # region instead of de novos - use the first position of the region to get closest gene!
+    dn = GRanges(seqnames=Rle(vars$chr), ranges = IRanges(start = vars$start, end = vars$start + 1))
   } else {
-    dn = GRanges(seqnames=Rle(de_novos$chr), ranges = IRanges(start = de_novos$pos, end = de_novos$pos + 1))
+    dn = GRanges(seqnames=Rle(vars$chr), ranges = IRanges(start = vars$pos, end = vars$pos + 1))
   }
 
   cne = GRanges(seqnames=Rle(CNEs$chr), ranges = IRanges(start = CNEs$start, end = CNEs$stop))
@@ -213,6 +213,35 @@ get_region_id <- function(de_novos, CNEs){
 
 
   return(CNEs$region_id[CNE_hits_idx])
+}
+
+
+get_chromHMM <- function(vars, bed){
+  # assumes that the CNE input has at least three columns with chr, start, end as the first three (all others ignored)
+  
+  if (any(!grepl("^chr", vars$chr))) {
+    vars$chr = paste0("chr", vars$chr)
+  }
+  if (any(!grepl("^chr", bed$chr))) {
+    bed$chr = paste0("chr", bed$chr)
+  }
+  
+  if ("end" %in% colnames(vars)){ # region instead of de novos - use the first position of the region to get closest gene!
+    v = GRanges(seqnames=Rle(vars$chr), ranges = IRanges(start = vars$start, end = vars$start + 1))
+  } else {
+    v = GRanges(seqnames=Rle(vars$chr), ranges = IRanges(start = vars$pos, end = vars$pos))
+  }
+  
+  b = GRanges(seqnames=Rle(bed$chr), ranges = IRanges(start = bed$start, end = bed$stop-1))
+  
+  # find overlap between denovos and annotated CNEs
+  hits = findOverlaps(v, b)
+  var_hits_idx = queryHits(hits) # get index of de novos
+  bed_hits_idx = subjectHits(hits) # get index of CNEs
+  
+  states = bed$chromHMM[bed_hits_idx]
+  
+  return(states)
 }
 
 get_sequence <- function(chr, start, stop, version = "hg19") {
